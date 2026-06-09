@@ -92,6 +92,8 @@ def pnl_emoji(v):
 def mot():
     return random.choice(MOTIVATION_MESSAGES)
 
+def clean_float(value: str) -> float:
+    return round(float(value.replace(",", ".")), 2)
 
 # ───────────────── START ─────────────────
 @dp.message(CommandStart())
@@ -145,23 +147,43 @@ async def direction(msg: Message, state: FSMContext):
 
 
 @dp.message(AddTrade.entry)
-async def entry(msg: Message, state: FSMContext):
-    await state.update_data(entry=float(msg.text))
+async def got_entry(msg: Message, state: FSMContext):
+    try:
+        entry = clean_float(msg.text)
+    except:
+        await msg.answer("❌ Введи число, например: 42500.5")
+        return
+
+    await state.update_data(entry=entry)
     await state.set_state(AddTrade.exit_)
-    await msg.answer("🔵 Цена выхода:")
+
+    await msg.answer("📤 Цена выхода:")
 
 @dp.message(AddTrade.exit_)
 async def exit_price(msg: Message, state: FSMContext):
     try:
-        exit_price = round(float(msg.text.replace(",", ".")), 2)
+        exit_price = clean_float(msg.text)
     except:
-        await msg.answer("Введите число, например: 1.5")
+        await msg.answer("❌ Введи число, например: 42500.5")
         return
 
     await state.update_data(exit_price=exit_price)
     await state.set_state(AddTrade.size)
+
     await msg.answer("📦 Размер позиции:")
     
+@dp.message(AddTrade.size)
+async def got_size(msg: Message, state: FSMContext):
+    try:
+        size = clean_float(msg.text)
+    except:
+        await msg.answer("❌ Введи число, например: 0.5")
+        return
+
+    await state.update_data(size=size)
+    await state.set_state(AddTrade.notes)
+
+    await msg.answer("📝 Заметки (или /skip):")
     
 @dp.message(AddTrade.notes)
 async def notes(msg: Message, state: FSMContext):
