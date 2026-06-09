@@ -26,7 +26,7 @@ class AddTrade(StatesGroup):
 
 # ── DB ────────────────────────────────────────────────────────────────────────
 async def get_db():
-    return await asyncpg.connect(DATABASE_URL, ssl='require')
+    return await asyncpg.connect(DATABASE_URL, ssl=False)
 
 async def init_db():
     conn = await get_db()
