@@ -11,7 +11,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
 from collections import defaultdict
-from datetime import datetime, timedelta
+from datetime import datetime
 
 
 TOKEN = os.environ["BOT_TOKEN"]
@@ -19,6 +19,8 @@ DATABASE_URL = os.environ.get("DATABASE_URL", "").replace("postgres://", "postgr
 
 bot = Bot(token=TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
+
+pool: asyncpg.Pool = None
 
 
 # ───────────────── MOTIVATION ─────────────────
@@ -48,38 +50,33 @@ class DeleteTrade(StatesGroup):
     choose = State()
 
 
-# ───────────────── DB ─────────────────
-async def get_db():
-    return await asyncpg.connect(
-        DATABASE_URL,
-        ssl="require" if "railway" in DATABASE_URL else False
-    )
+class ResetAccount(StatesGroup):
+    confirm = State()
 
 
+# ───────────────── DB INIT ─────────────────
 async def init_db():
-    conn = await get_db()
-    await conn.execute("""
-        CREATE TABLE IF NOT EXISTS trades (
-            id BIGSERIAL PRIMARY KEY,
-            user_id BIGINT,
-            symbol TEXT,
-            direction TEXT,
-            entry NUMERIC,
-            exit_price NUMERIC,
-            size NUMERIC,
-            pnl NUMERIC,
-            notes TEXT DEFAULT '',
-            created_at TIMESTAMP DEFAULT NOW()
-        )
-    """)
-    await conn.execute("""
-CREATE TABLE IF NOT EXISTS user_settings (
-    user_id BIGINT PRIMARY KEY,
-    start_balance NUMERIC DEFAULT 0
-)
-""")
-    
-    await conn.close()
+    async with pool.acquire() as conn:
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS trades (
+                id BIGSERIAL PRIMARY KEY,
+                user_id BIGINT,
+                symbol TEXT,
+                direction TEXT,
+                entry NUMERIC,
+                exit_price NUMERIC,
+                size NUMERIC,
+                pnl NUMERIC,
+                notes TEXT DEFAULT '',
+                created_at TIMESTAMP DEFAULT NOW()
+            )
+        """)
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS user_settings (
+                user_id BIGINT PRIMARY KEY,
+                start_balance NUMERIC DEFAULT 0
+            )
+        """)
 
 
 # ───────────────── HELPERS ─────────────────
@@ -99,8 +96,14 @@ def pnl_emoji(v):
 def mot():
     return random.choice(MOTIVATION_MESSAGES)
 
-def fmt_num(v, digits=2):
-    return f"{float(v):.{digits}f}"
+
+def parse_float(text: str):
+    """Парсит число из строки. Возвращает float или None."""
+    try:
+        return float(text.replace(",", "."))
+    except ValueError:
+        return None
+
 
 # ───────────────── START ─────────────────
 @dp.message(CommandStart())
@@ -111,7 +114,7 @@ async def start(msg: Message, state: FSMContext):
 
     await msg.answer(
         f"👋 Привет, {name}!\n\n"
-        "📊 Trading Journal готов к работе.по вопросам пиши @theadil_0\n\n"
+        "📊 Trading Journal готов к работе. По вопросам пиши @theadil_0\n\n"
         f"🔥💪🏻 {mot()}\n\n"
         "📌 Команды:\n"
         "/new — новая сделка\n"
@@ -158,70 +161,82 @@ async def direction(msg: Message, state: FSMContext):
 
 @dp.message(AddTrade.entry)
 async def entry(msg: Message, state: FSMContext):
-    await state.update_data(entry=float(msg.text))
+    value = parse_float(msg.text)
+    if value is None:
+        await msg.answer("❌ Введи число, например: 42500.5")
+        return
+    await state.update_data(entry=value)
     await state.set_state(AddTrade.exit_)
     await msg.answer("🔵 Цена выхода:")
 
 
 @dp.message(AddTrade.exit_)
 async def exit_price(msg: Message, state: FSMContext):
-    await state.update_data(exit_price=float(msg.text))
+    value = parse_float(msg.text)
+    if value is None:
+        await msg.answer("❌ Введи число, например: 43000.0")
+        return
+    await state.update_data(exit_price=value)
     await state.set_state(AddTrade.size)
     await msg.answer("📦 Размер позиции:")
 
+
 @dp.message(AddTrade.size)
 async def size(msg: Message, state: FSMContext):
-    await state.update_data(size=float(msg.text))
+    value = parse_float(msg.text)
+    if value is None:
+        await msg.answer("❌ Введи число, например: 0.5")
+        return
+    await state.update_data(size=value)
     await state.set_state(AddTrade.notes)
     await msg.answer("📝 Заметки (или '-' если нет):")
-    
+
+
 @dp.message(AddTrade.notes)
 async def notes(msg: Message, state: FSMContext):
     data = await state.get_data()
 
-    notes = "" if msg.text == "-" else msg.text
+    notes_text = "" if msg.text.strip() == "-" else msg.text
     pnl = calc_pnl(data["direction"], data["entry"], data["exit_price"], data["size"])
 
-    conn = await get_db()
-    await conn.execute(
-        """
-        INSERT INTO trades(user_id, symbol, direction, entry, exit_price, size, pnl, notes)
-        VALUES($1,$2,$3,$4,$5,$6,$7,$8)
-        """,
-        msg.from_user.id,
-        data["symbol"],
-        data["direction"],
-        data["entry"],
-        data["exit_price"],
-        data["size"],
-        pnl,
-        notes
-    )
-    await conn.close()
+    async with pool.acquire() as conn:
+        await conn.execute(
+            """
+            INSERT INTO trades(user_id, symbol, direction, entry, exit_price, size, pnl, notes)
+            VALUES($1,$2,$3,$4,$5,$6,$7,$8)
+            """,
+            msg.from_user.id,
+            data["symbol"],
+            data["direction"],
+            data["entry"],
+            data["exit_price"],
+            data["size"],
+            pnl,
+            notes_text
+        )
 
     await state.clear()
 
     await msg.answer(
-    f"💰 Сделка сохранена!\n\n"
-    f"{data['symbol']} {pnl_emoji(pnl)} {fmt(pnl)}\n\n"
-    f"💡 {mot()}\n\n"
-    "📌 Что дальше?\n"
-    "• /history — посмотреть сделки\n"
-    "• /stats — статистика\n"
-    "• /calendar — PnL по дням\n"
-    "• /new — новая сделка"
-)
+        f"💰 Сделка сохранена!\n\n"
+        f"{data['symbol']} {pnl_emoji(pnl)} {fmt(pnl)}\n\n"
+        f"💡 {mot()}\n\n"
+        "📌 Что дальше?\n"
+        "• /history — посмотреть сделки\n"
+        "• /stats — статистика\n"
+        "• /calendar — PnL по дням\n"
+        "• /new — новая сделка"
+    )
 
 
 # ───────────────── HISTORY ─────────────────
 @dp.message(Command("history"))
 async def history(msg: Message):
-    conn = await get_db()
-    rows = await conn.fetch(
-        "SELECT id, symbol, pnl FROM trades WHERE user_id=$1 ORDER BY created_at DESC LIMIT 10",
-        msg.from_user.id
-    )
-    await conn.close()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT id, symbol, pnl FROM trades WHERE user_id=$1 ORDER BY created_at DESC LIMIT 10",
+            msg.from_user.id
+        )
 
     if not rows:
         await msg.answer("История пуста")
@@ -232,112 +247,96 @@ async def history(msg: Message):
         text += f"ID: {r['id']} | {r['symbol']} {pnl_emoji(float(r['pnl']))} {fmt(float(r['pnl']))}\n"
 
     await msg.answer(text)
-# ───────────────── trade ─────────────────
+
+
+# ───────────────── TRADE ─────────────────
 @dp.message(Command("trade"))
 async def trade_view(msg: Message):
-    try:
-        parts = msg.text.split()
+    parts = msg.text.split()
 
-        if len(parts) < 2:
-            await msg.answer("Используй: /trade ID")
-            return
+    if len(parts) < 2:
+        await msg.answer("Используй: /trade ID")
+        return
 
-        trade_id = int(parts[1])
-
-    except ValueError:
+    trade_id = parse_float(parts[1])
+    if trade_id is None or not float(parts[1]).is_integer():
         await msg.answer("❌ ID должен быть числом\nПример: /trade 12")
         return
 
-    conn = await get_db()
-    row = await conn.fetchrow(
-        "SELECT * FROM trades WHERE id=$1 AND user_id=$2",
-        trade_id,
-        msg.from_user.id
-    )
-    await conn.close()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT * FROM trades WHERE id=$1 AND user_id=$2",
+            int(trade_id),
+            msg.from_user.id
+        )
 
     if not row:
         await msg.answer("Сделка не найдена")
         return
 
     text = (
-    f"📊 Сделка #{row['id']}\n\n"
-    f"📌 Символ: {row['symbol']}\n"
-    f"📍 Направление: {row['direction']}\n"
-    f"🔵 Вход: {fmt_num(row['entry'])}\n"
-    f"🔵 Выход: {fmt_num(row['exit_price'])}\n"
-    f"📦 Размер: {fmt_num(row['size'])}\n"
-    f"💰 PnL: {fmt(float(row['pnl']))}\n\n"
-    f"📝 Заметки:\n{row['notes'] or '—'}"
-)
+        f"📊 Сделка #{row['id']}\n\n"
+        f"📌 Символ: {row['symbol']}\n"
+        f"📍 Направление: {row['direction']}\n"
+        f"🔵 Вход: {float(row['entry']):.2f}\n"
+        f"🔵 Выход: {float(row['exit_price']):.2f}\n"
+        f"📦 Размер: {float(row['size']):.2f}\n"
+        f"💰 PnL: {fmt(float(row['pnl']))}\n\n"
+        f"📝 Заметки:\n{row['notes'] or '—'}"
+    )
 
     await msg.answer(text)
-# ───────────────── Calendar ─────────────────
 
 
+# ───────────────── CALENDAR ─────────────────
 @dp.message(Command("calendar"))
 async def calendar_view(msg: Message):
-    conn = await get_db()
-    rows = await conn.fetch(
-        "SELECT pnl, created_at FROM trades WHERE user_id=$1",
-        msg.from_user.id
-    )
-    await conn.close()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT pnl, created_at FROM trades WHERE user_id=$1",
+            msg.from_user.id
+        )
 
     if not rows:
         await msg.answer("Нет сделок")
         return
 
     daily = defaultdict(float)
-
     for r in rows:
         day = r["created_at"].date()
         daily[day] += float(r["pnl"])
 
     now = datetime.now()
     year, month = now.year, now.month
-
     month_name = calendar.month_name[month]
 
-    # ───── ANALYTICS ─────
     pnls = list(daily.values())
-
     total_pnl = sum(pnls)
     wins = len([p for p in pnls if p > 0])
-    losses = len([p for p in pnls if p < 0])
     winrate = (wins / len(pnls) * 100) if pnls else 0
-
     best_day = max(pnls) if pnls else 0
     worst_day = min(pnls) if pnls else 0
 
     text = f"📅 PnL календарь — {month_name} {year}\n\n"
 
-    # ───── CALENDAR GRID ─────
     cal = calendar.monthcalendar(year, month)
-
     for week in cal:
         line = ""
-
         for day in week:
             if day == 0:
                 line += "    "
                 continue
-
             date = datetime(year, month, day).date()
             pnl = daily.get(date, 0)
-
             if pnl > 0:
                 icon = "🟩"
             elif pnl < 0:
                 icon = "🟥"
             else:
                 icon = "⬜️"
-
             line += f"{day:02d}{icon} "
-
         text += line + "\n"
 
-    # ───── STATS ─────
     text += "\n📊 Итоги месяца\n\n"
     text += f"💰 PnL: {fmt(total_pnl)}\n"
     text += f"📈 Winrate: {winrate:.1f}%\n"
@@ -346,14 +345,16 @@ async def calendar_view(msg: Message):
     text += f"💀 Худший день: {fmt(worst_day)}"
 
     await msg.answer(text)
-    
-    
+
+
 # ───────────────── STATS ─────────────────
 @dp.message(Command("stats"))
 async def stats(msg: Message):
-    conn = await get_db()
-    rows = await conn.fetch("SELECT pnl FROM trades WHERE user_id=$1", msg.from_user.id)
-    await conn.close()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT pnl FROM trades WHERE user_id=$1",
+            msg.from_user.id
+        )
 
     if not rows:
         await msg.answer("Нет сделок")
@@ -372,26 +373,27 @@ async def stats(msg: Message):
     )
 
 
-# ───────────────── DELETE FLOW ─────────────────
+# ───────────────── DELETE ─────────────────
 @dp.message(Command("delete"))
 async def delete_start(msg: Message, state: FSMContext):
-    conn = await get_db()
-    rows = await conn.fetch(
-        "SELECT id, symbol, pnl FROM trades WHERE user_id=$1 ORDER BY created_at DESC LIMIT 10",
-        msg.from_user.id
-    )
-    await conn.close()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT id, symbol, pnl FROM trades WHERE user_id=$1 ORDER BY created_at DESC LIMIT 10",
+            msg.from_user.id
+        )
 
     if not rows:
         await msg.answer("Сделок нет")
         return
 
-    await state.update_data(rows=rows)
+    # Сохраняем сериализуемый список
+    rows_data = [{"id": r["id"], "symbol": r["symbol"], "pnl": float(r["pnl"])} for r in rows]
+    await state.update_data(rows=rows_data)
     await state.set_state(DeleteTrade.choose)
 
     text = "🗑 Введи номер сделки:\n\n"
-    for i, r in enumerate(rows, 1):
-        text += f"{i}. {r['symbol']} {fmt(float(r['pnl']))}\n"
+    for i, r in enumerate(rows_data, 1):
+        text += f"{i}. {r['symbol']} {fmt(r['pnl'])}\n"
 
     await msg.answer(text)
 
@@ -404,126 +406,86 @@ async def delete_choose(msg: Message, state: FSMContext):
     try:
         index = int(msg.text)
         assert 1 <= index <= len(rows)
-    except:
+    except Exception:
         await msg.answer("Введи корректный номер")
         return
 
     trade_id = rows[index - 1]["id"]
 
-    conn = await get_db()
-    await conn.execute(
-        "DELETE FROM trades WHERE id=$1 AND user_id=$2",
-        trade_id,
-        msg.from_user.id
-    )
-    await conn.close()
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "DELETE FROM trades WHERE id=$1 AND user_id=$2",
+            trade_id,
+            msg.from_user.id
+        )
 
     await state.clear()
-
     await msg.answer("🗑 Удалено")
 
-# ── DEPOSIT SYSTEM ────────────────────────────────────────────────────────────
 
-async def get_deposit(user_id):
-    conn = await get_db()
-
-    row = await conn.fetchrow(
-        "SELECT start_balance FROM user_settings WHERE user_id=$1",
-        user_id
-    )
-
-    await conn.close()
-
-    if row:
-        return float(row["start_balance"])
-
-    return 0
-
-
+# ───────────────── DEPOSIT ─────────────────
 @dp.message(Command("setdeposit"))
 async def set_deposit(msg: Message):
     parts = msg.text.split()
 
     if len(parts) != 2:
-        await msg.answer(
-            "Использование:\n"
-            "/setdeposit 1000"
-        )
+        await msg.answer("Использование:\n/setdeposit 1000")
         return
 
-    try:
-        deposit = round(float(parts[1].replace(",", ".")), 2)
-    except:
+    deposit = parse_float(parts[1])
+    if deposit is None:
         await msg.answer("❌ Введите корректное число")
         return
 
-    conn = await get_db()
+    deposit = round(deposit, 2)
 
-    await conn.execute("""
-        INSERT INTO user_settings(user_id, start_balance)
-        VALUES($1, $2)
-        ON CONFLICT(user_id)
-        DO UPDATE SET start_balance = EXCLUDED.start_balance
-    """, msg.from_user.id, deposit)
+    async with pool.acquire() as conn:
+        await conn.execute("""
+            INSERT INTO user_settings(user_id, start_balance)
+            VALUES($1, $2)
+            ON CONFLICT(user_id)
+            DO UPDATE SET start_balance = EXCLUDED.start_balance
+        """, msg.from_user.id, deposit)
 
-    await conn.close()
-
-    await msg.answer(
-        f"💰 Начальный депозит установлен:\n"
-        f"{deposit:.2f}$"
-    )
+    await msg.answer(f"💰 Начальный депозит установлен:\n{deposit:.2f}$")
 
 
-
+# ───────────────── BALANCE ─────────────────
 @dp.message(Command("balance"))
 async def balance(msg: Message):
     user_id = msg.from_user.id
-
-    conn = await get_db()
-
-    # ───── DEPOSIT ─────
-    start_balance = await get_deposit(user_id)
-
-    # ───── ALL TIME ─────
-    all_rows = await conn.fetch(
-        "SELECT pnl FROM trades WHERE user_id=$1",
-        user_id
-    )
-
-    # ───── TODAY ─────
     today = datetime.now().date()
-
-    today_rows = await conn.fetch("""
-        SELECT pnl FROM trades
-        WHERE user_id=$1 AND created_at::date = $2
-    """, user_id, today)
-
-    # ───── MONTH ─────
     month_start = datetime.now().replace(day=1).date()
 
-    month_rows = await conn.fetch("""
-        SELECT pnl FROM trades
-        WHERE user_id=$1 AND created_at::date >= $2
-    """, user_id, month_start)
+    async with pool.acquire() as conn:
+        setting = await conn.fetchrow(
+            "SELECT start_balance FROM user_settings WHERE user_id=$1", user_id
+        )
+        all_rows = await conn.fetch(
+            "SELECT pnl FROM trades WHERE user_id=$1", user_id
+        )
+        today_rows = await conn.fetch(
+            "SELECT pnl FROM trades WHERE user_id=$1 AND created_at::date=$2",
+            user_id, today
+        )
+        month_rows = await conn.fetch(
+            "SELECT pnl FROM trades WHERE user_id=$1 AND created_at::date>=$2",
+            user_id, month_start
+        )
 
-    await conn.close()
+    start_balance = float(setting["start_balance"]) if setting else 0
 
-    # ───── helpers ─────
     def total(rows):
         return sum(float(r["pnl"]) for r in rows)
 
     all_pnl = total(all_rows)
     today_pnl = total(today_rows)
     month_pnl = total(month_rows)
-
     current_balance = start_balance + all_pnl
 
     def pct(pnl):
-        if start_balance > 0:
-            return (pnl / start_balance) * 100
-        return 0
+        return (pnl / start_balance) * 100 if start_balance > 0 else 0
 
-    # ───── TEXT ─────
     text = (
         f"💰 Balance Dashboard\n\n"
         f"📅 Сегодня: {today_pnl:+.2f}$ ({pct(today_pnl):+.2f}%)\n"
@@ -534,51 +496,59 @@ async def balance(msg: Message):
     )
 
     await msg.answer(text)
-    
-# ────────reset account ─────────────────
+
+
+# ───────────────── RESET ACCOUNT ─────────────────
 @dp.message(Command("resetaccount"))
-async def reset_account(msg: Message):
+async def reset_account(msg: Message, state: FSMContext):
+    await state.set_state(ResetAccount.confirm)
     await msg.answer(
         "⚠️ ВНИМАНИЕ!\n\n"
         "Это удалит:\n"
         "• все сделки\n"
         "• депозит\n"
         "• всю статистику\n\n"
-        "Для подтверждения введи:\n"
-        "/confirmreset"
+        "Напиши ДА для подтверждения или НЕТ для отмены:"
     )
-@dp.message(Command("confirmreset"))
-async def confirm_reset(msg: Message):
-    conn = await get_db()
 
-    try:
-        await conn.execute(
-            "DELETE FROM trades WHERE user_id=$1",
-            msg.from_user.id
+
+@dp.message(ResetAccount.confirm)
+async def confirm_reset(msg: Message, state: FSMContext):
+    answer = msg.text.strip().upper()
+
+    if answer == "ДА":
+        async with pool.acquire() as conn:
+            await conn.execute(
+                "DELETE FROM trades WHERE user_id=$1", msg.from_user.id
+            )
+            await conn.execute(
+                "DELETE FROM user_settings WHERE user_id=$1", msg.from_user.id
+            )
+        await msg.answer(
+            "🗑 Аккаунт полностью сброшен.\n\n"
+            "Начни заново:\n/setdeposit 1000"
         )
+    else:
+        await msg.answer("✅ Отменено")
 
-        await conn.execute(
-            "DELETE FROM user_settings WHERE user_id=$1",
-            msg.from_user.id
-        )
+    await state.clear()
 
-    finally:
-        await conn.close()
-
-    await msg.answer(
-        "🗑 Аккаунт полностью сброшен.\n\n"
-        "Теперь можешь начать заново:\n"
-        "/setdeposit 1000"
-    )
 
 # ───────────────── TIP ─────────────────
 @dp.message(Command("tip"))
 async def tip(msg: Message):
-    await msg.answer(f" {mot()}")
+    await msg.answer(f"💡 {mot()}")
 
 
 # ───────────────── MAIN ─────────────────
 async def main():
+    global pool
+    pool = await asyncpg.create_pool(
+        DATABASE_URL,
+        ssl="require" if "railway" in DATABASE_URL else False,
+        min_size=1,
+        max_size=5
+    )
     await init_db()
     await dp.start_polling(bot)
 
