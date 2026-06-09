@@ -150,14 +150,6 @@ async def entry(msg: Message, state: FSMContext):
     await state.set_state(AddTrade.exit_)
     await msg.answer("🔵 Цена выхода:")
 
-
-@dp.message(AddTrade.exit_)
-async def exit_price(msg: Message, state: FSMContext):
-    await state.update_data(exit_price=float(msg.text))
-    await state.set_state(AddTrade.size)
-    await msg.answer("📦 Размер позиции:")
-
-
 @dp.message(AddTrade.exit_)
 async def exit_price(msg: Message, state: FSMContext):
     try:
