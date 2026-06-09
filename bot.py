@@ -97,17 +97,85 @@ async def cmd_start(msg: Message, state: FSMContext):
     name = msg.from_user.first_name
     await msg.answer(
         f"Привет, {name}! 👋\n\n"
-        "Я твой <b>торговый журнал</b>.\n"
-        "Записывай сделки, смотри статистику и следи за PnL.",
+        "<b>Торговый журнал</b> — записывай сделки и следи за PnL.\n\n"
+        "📌 <b>Команды:</b>\n"
+        "/new — добавить новую сделку\n"
+        "/stats — статистика и PnL\n"
+        "/history — последние 10 сделок\n"
+        "/delete — удалить сделку\n"
+        "/menu — главное меню",
+        parse_mode="HTML",
+        reply_markup=main_kb()
+    )
+    
+@dp.message(Command("new"))
+async def cmd_new(msg: Message, state: FSMContext):
+    await state.set_state(AddTrade.symbol)
+    await msg.answer(
+        "📝 <b>Новая сделка</b>\n\nШаг 1/5 — Введи инструмент:\n<i>Например: BTC, EURUSD, AAPL</i>",
+        parse_mode="HTML",
+        reply_markup=cancel_kb()
+    )
+
+@dp.message(Command("stats"))
+async def cmd_stats(msg: Message):
+    conn = await get_db()
+    rows = await conn.fetch("SELECT pnl FROM trades WHERE user_id=$1", msg.from_user.id)
+    await conn.close()
+    if not rows:
+        await msg.answer("Статистики пока нет — добавь первую сделку!", reply_markup=main_kb())
+        return
+    pnls = [float(r["pnl"]) for r in rows]
+    total = sum(pnls)
+    wins = [p for p in pnls if p > 0]
+    losses = [p for p in pnls if p < 0]
+    winrate = len(wins) / len(pnls) * 100
+    avg_win = sum(wins) / len(wins) if wins else 0
+    avg_loss = abs(sum(losses) / len(losses)) if losses else 0
+    rr = avg_win / avg_loss if avg_loss > 0 else 0
+    best = max(pnls)
+    worst = min(pnls)
+    bar_len = 12
+    win_blocks = round(winrate / 100 * bar_len)
+    bar = "🟩" * win_blocks + "🟥" * (bar_len - win_blocks)
+    await msg.answer(
+        f"📊 <b>Твоя статистика</b>\n\n"
+        f"💰 Общий PnL: <b>{fmt(total)}</b>\n"
+        f"📈 Винрейт: <b>{winrate:.1f}%</b>\n"
+        f"{bar}\n\n"
+        f"📦 Всего сделок: <b>{len(pnls)}</b>\n"
+        f"✅ Прибыльных: <b>{len(wins)}</b>\n"
+        f"❌ Убыточных: <b>{len(losses)}</b>\n\n"
+        f"⚖️ Risk/Reward: <b>{rr:.2f}</b>\n"
+        f"📈 Ср. выигрыш: <b>+{avg_win:.2f}</b>\n"
+        f"📉 Ср. потеря: <b>-{avg_loss:.2f}</b>\n\n"
+        f"🏆 Лучшая: <b>+{best:.2f}</b>\n"
+        f"💀 Худшая: <b>{worst:.2f}</b>",
         parse_mode="HTML",
         reply_markup=main_kb()
     )
 
-@dp.message(Command("menu"))
-async def cmd_menu(msg: Message, state: FSMContext):
-    await state.clear()
-    await msg.answer("Главное меню:", reply_markup=main_kb())
-
+@dp.message(Command("history"))
+async def cmd_history(msg: Message):
+    conn = await get_db()
+    rows = await conn.fetch(
+        "SELECT * FROM trades WHERE user_id=$1 ORDER BY created_at DESC LIMIT 10",
+        msg.from_user.id
+    )
+    await conn.close()
+    if not rows:
+        await msg.answer("История пуста — добавь первую сделку!", reply_markup=main_kb())
+        return
+    lines = ["📋 <b>Последние 10 сделок:</b>\n"]
+    for r in rows:
+        pnl = float(r["pnl"])
+        dir_icon = "▲" if r["direction"] == "Long" else "▼"
+        date_str = r["date"].strftime("%d.%m") if r["date"] else ""
+        lines.append(
+            f"{pnl_emoji(pnl)} <b>{r['symbol']}</b> {dir_icon} "
+            f"{fmt(pnl)}  <i>{date_str}</i>"
+        )
+    await msg.answer("\n".join(lines), parse_mode="HTML", reply_markup=main_kb())
 # ── CANCEL ────────────────────────────────────────────────────────────────────
 @dp.callback_query(F.data == "cancel")
 async def cancel(cb: CallbackQuery, state: FSMContext):
