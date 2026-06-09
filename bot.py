@@ -306,6 +306,47 @@ async def show_history(cb: CallbackQuery):
 
     await cb.message.edit_text("\n".join(lines), parse_mode="HTML", reply_markup=main_kb())
 
+# ── DELETE BY NUMBER ──────────────────────────────────────────────────────────
+@dp.message(Command("delete"))
+async def cmd_delete(msg: Message):
+    conn = await get_db()
+    rows = await conn.fetch(
+        "SELECT id, symbol, direction, pnl, date FROM trades WHERE user_id=$1 ORDER BY created_at DESC LIMIT 10",
+        msg.from_user.id
+    )
+    await conn.close()
+
+    if not rows:
+        await msg.answer("Сделок нет.", reply_markup=main_kb())
+        return
+
+    lines = ["🗑 <b>Выбери сделку для удаления:</b>\n"]
+    buttons = []
+    for i, r in enumerate(rows, 1):
+        pnl = float(r["pnl"])
+        d = r["date"].strftime("%d.%m") if r["date"] else ""
+        lines.append(f"{i}. {pnl_emoji(pnl)} <b>{r['symbol']}</b> {fmt(pnl)}  <i>{d}</i>")
+        buttons.append([InlineKeyboardButton(
+            text=f"❌ {i}. {r['symbol']} {fmt(pnl)}",
+            callback_data=f"del_{r['id']}"
+        )])
+
+    buttons.append([InlineKeyboardButton(text="Отмена", callback_data="cancel")])
+    await msg.answer("\n".join(lines), parse_mode="HTML",
+                     reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
+
+
+@dp.callback_query(F.data.startswith("del_"))
+async def do_delete(cb: CallbackQuery):
+    trade_id = int(cb.data.split("_")[1])
+    conn = await get_db()
+    await conn.execute(
+        "DELETE FROM trades WHERE id=$1 AND user_id=$2",
+        trade_id, cb.from_user.id
+    )
+    await conn.close()
+    await cb.message.edit_text("✅ Сделка удалена.", reply_markup=main_kb())
+
 # ── MAIN ──────────────────────────────────────────────────────────────────────
 async def main():
     await init_db()
