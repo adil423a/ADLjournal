@@ -483,17 +483,20 @@ async def balance(msg: Message):
     month_pnl = total(month_rows)
     current_balance = start_balance + all_pnl
 
-    def pct(pnl):
-        return (pnl / start_balance) * 100 if start_balance > 0 else 0
+    balance_before_today = start_balance + (all_pnl - today_pnl)
+    balance_before_month = start_balance + (all_pnl - month_pnl)
 
-    text = (
-        f"💰 Balance Dashboard\n\n"
-        f"📅 Сегодня: {today_pnl:+.2f}$ ({pct(today_pnl):+.2f}%)\n"
-        f"📆 Месяц: {month_pnl:+.2f}$ ({pct(month_pnl):+.2f}%)\n"
-        f"♾ Всё время: {all_pnl:+.2f}$ ({pct(all_pnl):+.2f}%)\n\n"
-        f"💵 Депозит: {start_balance:.2f}$\n"
-        f"🏦 Баланс: {current_balance:.2f}$"
-    )
+def pct(pnl, base):
+    return (pnl / base) * 100 if base > 0 else 0
+
+text = (
+    f"💰 Balance Dashboard\n\n"
+    f"📅 Сегодня: {today_pnl:+.2f}$ ({pct(today_pnl, balance_before_today):+.2f}%)\n"
+    f"📆 Месяц: {month_pnl:+.2f}$ ({pct(month_pnl, balance_before_month):+.2f}%)\n"
+    f"♾ Всё время: {all_pnl:+.2f}$ ({pct(all_pnl, start_balance):+.2f}%)\n\n"
+    f"💵 Депозит: {start_balance:.2f}$\n"
+    f"🏦 Баланс: {current_balance:.2f}$"
+)
 
     await msg.answer(text)
 
