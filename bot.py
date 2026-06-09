@@ -10,7 +10,7 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
 
 TOKEN = os.environ["BOT_TOKEN"]
-DATABASE_URL = os.environ["DATABASE_URL"]
+DATABASE_URL = os.environ.get("DATABASE_URL", "").replace("postgres://", "postgresql://")
 
 bot = Bot(token=TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
@@ -26,7 +26,7 @@ class AddTrade(StatesGroup):
 
 # ── DB ────────────────────────────────────────────────────────────────────────
 async def get_db():
-    return await asyncpg.connect(DATABASE_URL, ssl=False)
+    return await asyncpg.connect(DATABASE_URL, ssl='require' if 'railway' in DATABASE_URL else False)
 
 async def init_db():
     conn = await get_db()
