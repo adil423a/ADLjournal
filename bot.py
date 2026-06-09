@@ -179,10 +179,15 @@ async def notes(msg: Message, state: FSMContext):
     await state.clear()
 
     await msg.answer(
-        f"💰 Сделка сохранена!\n\n"
-        f"{data['symbol']} {pnl_emoji(pnl)} {fmt(pnl)}\n\n"
-        f"💡 {mot()}"
-    )
+    f"💰 Сделка сохранена!\n\n"
+    f"{data['symbol']} {pnl_emoji(pnl)} {fmt(pnl)}\n\n"
+    f"💡 {mot()}\n\n"
+    "📌 Что дальше?\n"
+    "• /history — посмотреть сделки\n"
+    "• /stats — статистика\n"
+    "• /calendar — PnL по дням\n"
+    "• /new — новая сделка"
+)
 
 
 # ───────────────── HISTORY ─────────────────
