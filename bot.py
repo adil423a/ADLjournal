@@ -1,9 +1,10 @@
 import os
 import asyncio
 import asyncpg
+import matplotlib.pyplot as plt
 
 from aiogram import Bot, Dispatcher
-from aiogram.types import Message
+from aiogram.types import Message, FSInputFile
 from aiogram.filters import CommandStart, Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -16,17 +17,18 @@ bot = Bot(token=TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
 
 
-# ── STATES ─────────────────────────────────────────────
+# ───────────────── STATES ─────────────────
 class AddTrade(StatesGroup):
     symbol = State()
     direction = State()
     entry = State()
     exit_ = State()
     size = State()
-    notes = State()
+    tag = State()
+    mood = State()
 
 
-# ── DB ────────────────────────────────────────────────
+# ───────────────── DB ─────────────────
 async def get_db():
     return await asyncpg.connect(
         DATABASE_URL,
@@ -46,183 +48,251 @@ async def init_db():
             exit_price NUMERIC,
             size NUMERIC,
             pnl NUMERIC,
-            notes TEXT DEFAULT '',
+            tag TEXT DEFAULT '',
+            mood TEXT DEFAULT '',
             created_at TIMESTAMP DEFAULT NOW()
         )
     """)
     await conn.close()
 
 
-# ── HELPERS ───────────────────────────────────────────
-def calc_pnl(direction, entry, exit_price, size):
+# ───────────────── HELPERS ─────────────────
+def pnl(direction, entry, exit_price, size):
     raw = (exit_price - entry) * size
     return -raw if direction.lower() == "short" else raw
 
 
-def fmt(v):
-    return f"+{v:.2f}" if v > 0 else f"{v:.2f}"
+def fmt(x):
+    return f"+{x:.2f}" if x > 0 else f"{x:.2f}"
 
 
-def pnl_emoji(v):
-    return "🟢" if v >= 0 else "🔴"
+def equity_curve(pnls):
+    eq = []
+    total = 0
+    for p in pnls:
+        total += p
+        eq.append(total)
+    return eq
 
 
-# ── START ─────────────────────────────────────────────
+def profit_factor(pnls):
+    wins = sum(p for p in pnls if p > 0)
+    losses = abs(sum(p for p in pnls if p < 0))
+    return wins / losses if losses else float("inf")
+
+
+def expectancy(pnls):
+    wins = [p for p in pnls if p > 0]
+    losses = [p for p in pnls if p < 0]
+    winrate = len(wins) / len(pnls) if pnls else 0
+    avg_win = sum(wins) / len(wins) if wins else 0
+    avg_loss = abs(sum(losses) / len(losses)) if losses else 0
+    return winrate * avg_win - (1 - winrate) * avg_loss
+
+
+def max_drawdown(eq):
+    peak = -float("inf")
+    dd = 0
+    for x in eq:
+        peak = max(peak, x)
+        dd = min(dd, x - peak)
+    return dd
+
+
+def insights(rows):
+    txt = []
+
+    long = [float(r["pnl"]) for r in rows if r["direction"].lower() == "long"]
+    short = [float(r["pnl"]) for r in rows if r["direction"].lower() == "short"]
+
+    if long and sum(long) < sum(short):
+        txt.append("SHORT стратегии работают лучше LONG")
+
+    if len([r for r in rows if float(r["pnl"]) < 0]) / len(rows) > 0.6:
+        txt.append("Ты часто пересиживаешь убытки")
+
+    if len(rows) > 20:
+        last10 = [float(r["pnl"]) for r in rows[:10]]
+        prev10 = [float(r["pnl"]) for r in rows[10:20]]
+        if sum(last10) < sum(prev10):
+            txt.append("Последние сделки хуже предыдущих → возможно tilt")
+
+    return txt
+
+
+# ───────────────── START ─────────────────
 @dp.message(CommandStart())
-async def start(msg: Message, state: FSMContext):
-    await state.clear()
+async def start(msg: Message):
     await msg.answer(
-        "👋 Привет!\n\n"
+        "📊 Trading Journal Bot (Level 3)\n\n"
         "Команды:\n"
-        "/new — новая сделка\n"
-        "/stats — статистика\n"
-        "/history — последние сделки\n"
-        "/delete <id> — удалить сделку"
+        "/new — добавить сделку\n"
+        "/stats — аналитика\n"
+        "/history — сделки\n"
+        "/delete ID — удалить"
     )
 
 
-# ── NEW TRADE FLOW ────────────────────────────────────
+# ───────────────── NEW TRADE ─────────────────
 @dp.message(Command("new"))
-async def new_trade(msg: Message, state: FSMContext):
+async def new(msg: Message, state: FSMContext):
     await state.set_state(AddTrade.symbol)
-    await msg.answer("📌 Введи символ (BTC, EURUSD, AAPL):")
+    await msg.answer("Symbol:")
 
 
 @dp.message(AddTrade.symbol)
-async def symbol(msg: Message, state: FSMContext):
+async def s(msg, state):
     await state.update_data(symbol=msg.text.upper())
     await state.set_state(AddTrade.direction)
-    await msg.answer("📍 Направление (long / short):")
+    await msg.answer("Direction (long/short):")
 
 
 @dp.message(AddTrade.direction)
-async def direction(msg: Message, state: FSMContext):
+async def d(msg, state):
     await state.update_data(direction=msg.text.lower())
     await state.set_state(AddTrade.entry)
-    await msg.answer("🔵 Цена входа:")
+    await msg.answer("Entry price:")
 
 
 @dp.message(AddTrade.entry)
-async def entry(msg: Message, state: FSMContext):
+async def e(msg, state):
     await state.update_data(entry=float(msg.text))
     await state.set_state(AddTrade.exit_)
-    await msg.answer("🔵 Цена выхода:")
+    await msg.answer("Exit price:")
 
 
 @dp.message(AddTrade.exit_)
-async def exit_price(msg: Message, state: FSMContext):
+async def x(msg, state):
     await state.update_data(exit_price=float(msg.text))
     await state.set_state(AddTrade.size)
-    await msg.answer("📦 Размер позиции:")
+    await msg.answer("Size:")
 
 
 @dp.message(AddTrade.size)
-async def size(msg: Message, state: FSMContext):
+async def size(msg, state):
     await state.update_data(size=float(msg.text))
-    await state.set_state(AddTrade.notes)
-    await msg.answer("📝 Заметки (или '-' если нет):")
+    await state.set_state(AddTrade.tag)
+    await msg.answer("Tag (scalp/swing/breakout):")
 
 
-@dp.message(AddTrade.notes)
-async def notes(msg: Message, state: FSMContext):
+@dp.message(AddTrade.tag)
+async def tag(msg, state):
+    await state.update_data(tag=msg.text)
+    await state.set_state(AddTrade.mood)
+    await msg.answer("Mood (confident/revenge/tilt):")
+
+
+@dp.message(AddTrade.mood)
+async def mood(msg, state):
     data = await state.get_data()
 
-    notes = msg.text if msg.text != "-" else ""
-    pnl = calc_pnl(data["direction"], data["entry"], data["exit_price"], data["size"])
-
     conn = await get_db()
-    await conn.execute(
-        """
-        INSERT INTO trades(user_id, symbol, direction, entry, exit_price, size, pnl, notes)
-        VALUES($1,$2,$3,$4,$5,$6,$7,$8)
-        """,
-        msg.from_user.id,
-        data["symbol"],
+
+    pnl_value = pnl(
         data["direction"],
         data["entry"],
         data["exit_price"],
-        data["size"],
-        pnl,
-        notes
+        data["size"]
     )
-    await conn.close()
 
+    await conn.execute("""
+        INSERT INTO trades(user_id, symbol, direction, entry, exit_price, size, pnl, tag, mood)
+        VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)
+    """, msg.from_user.id,
+        data["symbol"], data["direction"],
+        data["entry"], data["exit_price"], data["size"],
+        pnl_value, data["tag"], msg.text
+    )
+
+    await conn.close()
     await state.clear()
 
-    await msg.answer(
-        f"✅ Сохранено\n\n"
-        f"{data['symbol']} {pnl_emoji(pnl)} {fmt(pnl)}"
-    )
+    await msg.answer(f"Saved {data['symbol']} {fmt(pnl_value)}")
 
 
-# ── STATS ─────────────────────────────────────────────
+# ───────────────── STATS ─────────────────
 @dp.message(Command("stats"))
 async def stats(msg: Message):
     conn = await get_db()
-    rows = await conn.fetch("SELECT pnl FROM trades WHERE user_id=$1", msg.from_user.id)
+    rows = await conn.fetch(
+        "SELECT * FROM trades WHERE user_id=$1 ORDER BY created_at",
+        msg.from_user.id
+    )
     await conn.close()
 
     if not rows:
-        await msg.answer("Нет сделок")
+        await msg.answer("No trades")
         return
 
     pnls = [float(r["pnl"]) for r in rows]
-    total = sum(pnls)
 
-    winrate = len([p for p in pnls if p > 0]) / len(pnls) * 100
+    eq = equity_curve(pnls)
 
-    await msg.answer(
-        f"📊 Статистика\n\n"
-        f"PnL: {fmt(total)}\n"
-        f"Winrate: {winrate:.1f}%\n"
-        f"Trades: {len(pnls)}"
+    # graph
+    plt.figure()
+    plt.plot(eq)
+    plt.title("Equity Curve")
+    plt.savefig("equity.png")
+    plt.close()
+
+    pf = profit_factor(pnls)
+    ex = expectancy(pnls)
+    dd = max_drawdown(eq)
+
+    ins = insights(rows)
+
+    text = (
+        f"📊 DASHBOARD\n\n"
+        f"PnL: {sum(pnls):.2f}\n"
+        f"PF: {pf:.2f}\n"
+        f"Expectancy: {ex:.2f}\n"
+        f"Max DD: {dd:.2f}\n\n"
     )
 
+    if ins:
+        text += "🧠 Insights:\n" + "\n".join("- " + i for i in ins)
 
-# ── HISTORY ───────────────────────────────────────────
+    await msg.answer(text)
+    await msg.answer_photo(FSInputFile("equity.png"))
+
+
+# ───────────────── HISTORY ─────────────────
 @dp.message(Command("history"))
 async def history(msg: Message):
     conn = await get_db()
     rows = await conn.fetch(
-        "SELECT symbol, direction, pnl FROM trades WHERE user_id=$1 ORDER BY created_at DESC LIMIT 10",
+        "SELECT * FROM trades WHERE user_id=$1 ORDER BY created_at DESC LIMIT 10",
         msg.from_user.id
     )
     await conn.close()
 
-    if not rows:
-        await msg.answer("История пуста")
-        return
-
-    text = "📋 Последние сделки:\n\n"
+    text = "📋 Trades:\n\n"
     for r in rows:
-        text += f"{r['symbol']} {pnl_emoji(r['pnl'])} {fmt(float(r['pnl']))}\n"
+        text += f"{r['symbol']} | {r['direction']} | {r['pnl']:.2f} | {r['tag']} | {r['mood']}\n"
 
     await msg.answer(text)
 
 
-# ── DELETE ────────────────────────────────────────────
+# ───────────────── DELETE ─────────────────
 @dp.message(Command("delete"))
 async def delete(msg: Message):
-    parts = msg.text.split()
-
-    if len(parts) < 2:
-        await msg.answer("Используй: /delete ID")
+    try:
+        trade_id = int(msg.text.split()[1])
+    except:
+        await msg.answer("Use /delete ID")
         return
-
-    trade_id = int(parts[1])
 
     conn = await get_db()
     await conn.execute(
         "DELETE FROM trades WHERE id=$1 AND user_id=$2",
-        trade_id,
-        msg.from_user.id
+        trade_id, msg.from_user.id
     )
     await conn.close()
 
-    await msg.answer("🗑 Удалено")
+    await msg.answer("Deleted")
 
 
-# ── MAIN ──────────────────────────────────────────────
+# ───────────────── MAIN ─────────────────
 async def main():
     await init_db()
     await dp.start_polling(bot)
