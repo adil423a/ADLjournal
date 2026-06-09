@@ -122,6 +122,7 @@ async def start(msg: Message, state: FSMContext):
         "/trade — сделка\n"
         "/setdeposit — установить депозит\n"
         "/balance — текущий баланс\n"
+        "/resetaccount — полный сброс аккаунта\n"
         "/tip — совет"
     )
 
@@ -522,6 +523,41 @@ async def balance(msg: Message):
         f"📈 Прибыль: {total_pnl:+.2f}$\n"
         f"🏦 Баланс: {current_balance:.2f}$\n"
         f"📊 Доходность: {profit_percent:.2f}%"
+    )
+# ────────reset account ─────────────────
+@dp.message(Command("resetaccount"))
+async def reset_account(msg: Message):
+    await msg.answer(
+        "⚠️ ВНИМАНИЕ!\n\n"
+        "Это удалит:\n"
+        "• все сделки\n"
+        "• депозит\n"
+        "• всю статистику\n\n"
+        "Для подтверждения введи:\n"
+        "/confirmreset"
+    )
+@dp.message(Command("confirmreset"))
+async def confirm_reset(msg: Message):
+    conn = await get_db()
+
+    try:
+        await conn.execute(
+            "DELETE FROM trades WHERE user_id=$1",
+            msg.from_user.id
+        )
+
+        await conn.execute(
+            "DELETE FROM user_settings WHERE user_id=$1",
+            msg.from_user.id
+        )
+
+    finally:
+        await conn.close()
+
+    await msg.answer(
+        "🗑 Аккаунт полностью сброшен.\n\n"
+        "Теперь можешь начать заново:\n"
+        "/setdeposit 1000"
     )
 
 # ───────────────── TIP ─────────────────
