@@ -102,13 +102,17 @@ async def start(msg: Message, state: FSMContext):
 
     await msg.answer(
         f"👋 Привет, {name}!\n\n"
-        "📊 Trading Journal готов к работе.\n\n"
-        f"💡 {mot()}\n\n"
+        "📊 Trading Journal готов к работе.
+        по вопросам пиши @theadil_0
+        \n\n"
+        f"🔥💪🏻 {mot()}\n\n"
         "📌 Команды:\n"
         "/new — новая сделка\n"
         "/history — история\n"
         "/stats — статистика\n"
         "/delete — удалить сделку\n"
+        "/calendar — совет"
+        "/trade — совет"
         "/tip — совет"
     )
 
