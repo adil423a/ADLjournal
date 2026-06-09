@@ -153,47 +153,21 @@ async def direction(msg: Message, state: FSMContext):
     await state.set_state(AddTrade.entry)
 
     icon = "▲ LONG" if text == "long" else "▼ SHORT"
-    await msg.answer(f"📍 Направление: {icon}\n\n🔵 Цена входа:")
+    await msg.answer(f"📍 Направление: {icon}\n\n🔵 Entry price:")
 
 
 @dp.message(AddTrade.entry)
-async def got_entry(msg: Message, state: FSMContext):
-    try:
-        entry = clean_float(msg.text)
-    except:
-        await msg.answer("❌ Введи число, например: 42500.5")
-        return
-
-    await state.update_data(entry=entry)
+async def entry(msg: Message, state: FSMContext):
+    await state.update_data(entry=float(msg.text))
     await state.set_state(AddTrade.exit_)
-
     await msg.answer("🔵 Цена выхода:")
+
 
 @dp.message(AddTrade.exit_)
 async def exit_price(msg: Message, state: FSMContext):
-    try:
-        exit_price = clean_float(msg.text)
-    except:
-        await msg.answer("❌ Введи число, например: 42500.5")
-        return
-
-    await state.update_data(exit_price=exit_price)
+    await state.update_data(exit_price=float(msg.text))
     await state.set_state(AddTrade.size)
-
     await msg.answer("📦 Размер позиции:")
-    
-@dp.message(AddTrade.size)
-async def got_size(msg: Message, state: FSMContext):
-    try:
-        size = clean_float(msg.text)
-    except:
-        await msg.answer("❌ Введи число, например: 0.5")
-        return
-
-    await state.update_data(size=size)
-    await state.set_state(AddTrade.notes)
-
-    await msg.answer("📝 Заметки (напиши либо оставь пустым):")
     
 @dp.message(AddTrade.notes)
 async def notes(msg: Message, state: FSMContext):
