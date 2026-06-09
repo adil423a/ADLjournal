@@ -157,7 +157,7 @@ async def got_entry(msg: Message, state: FSMContext):
     await state.update_data(entry=entry)
     await state.set_state(AddTrade.exit_)
 
-    await msg.answer("📤 Цена выхода:")
+    await msg.answer("🔵 Цена выхода:")
 
 @dp.message(AddTrade.exit_)
 async def exit_price(msg: Message, state: FSMContext):
@@ -183,7 +183,7 @@ async def got_size(msg: Message, state: FSMContext):
     await state.update_data(size=size)
     await state.set_state(AddTrade.notes)
 
-    await msg.answer("📝 Заметки (или /skip):")
+    await msg.answer("📝 Заметки (напиши либо оставь пустым):")
     
 @dp.message(AddTrade.notes)
 async def notes(msg: Message, state: FSMContext):
