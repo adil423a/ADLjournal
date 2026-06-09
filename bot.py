@@ -474,36 +474,67 @@ async def set_deposit(msg: Message):
     )
 
 
+
 @dp.message(Command("balance"))
 async def balance(msg: Message):
     user_id = msg.from_user.id
 
-    start_balance = await get_deposit(user_id)
-
     conn = await get_db()
 
-    row = await conn.fetchrow(
-        "SELECT COALESCE(SUM(pnl),0) AS total FROM trades WHERE user_id=$1",
+    # ───── DEPOSIT ─────
+    start_balance = await get_deposit(user_id)
+
+    # ───── ALL TIME ─────
+    all_rows = await conn.fetch(
+        "SELECT pnl FROM trades WHERE user_id=$1",
         user_id
     )
 
+    # ───── TODAY ─────
+    today = datetime.now().date()
+
+    today_rows = await conn.fetch("""
+        SELECT pnl FROM trades
+        WHERE user_id=$1 AND created_at::date = $2
+    """, user_id, today)
+
+    # ───── MONTH ─────
+    month_start = datetime.now().replace(day=1).date()
+
+    month_rows = await conn.fetch("""
+        SELECT pnl FROM trades
+        WHERE user_id=$1 AND created_at::date >= $2
+    """, user_id, month_start)
+
     await conn.close()
 
-    total_pnl = float(row["total"])
+    # ───── helpers ─────
+    def total(rows):
+        return sum(float(r["pnl"]) for r in rows)
 
-    current_balance = start_balance + total_pnl
+    all_pnl = total(all_rows)
+    today_pnl = total(today_rows)
+    month_pnl = total(month_rows)
 
-    profit_percent = (
-        (total_pnl / start_balance) * 100
-        if start_balance > 0 else 0
-    )
+    current_balance = start_balance + all_pnl
 
-    await msg.answer(
+    def pct(pnl):
+        if start_balance > 0:
+            return (pnl / start_balance) * 100
+        return 0
+
+    # ───── TEXT ─────
+    text = (
+        f"💰 Balance Dashboard\n\n"
+        f"📅 Сегодня: {today_pnl:+.2f}$ ({pct(today_pnl):+.2f}%)\n"
+        f"📆 Месяц: {month_pnl:+.2f}$ ({pct(month_pnl):+.2f}%)\n"
+        f"♾ Всё время: {all_pnl:+.2f}$ ({pct(all_pnl):+.2f}%)\n\n"
         f"💵 Депозит: {start_balance:.2f}$\n"
-        f"📈 Прибыль: {total_pnl:+.2f}$\n"
-        f"🏦 Баланс: {current_balance:.2f}$\n"
-        f"📊 Доходность: {profit_percent:.2f}%"
+        f"🏦 Баланс: {current_balance:.2f}$"
     )
+
+    await msg.answer(text)
+    
 # ────────reset account ─────────────────
 @dp.message(Command("resetaccount"))
 async def reset_account(msg: Message):
