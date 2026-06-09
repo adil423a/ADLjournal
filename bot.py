@@ -158,13 +158,19 @@ async def exit_price(msg: Message, state: FSMContext):
     await msg.answer("📦 Размер позиции:")
 
 
-@dp.message(AddTrade.size)
-async def size(msg: Message, state: FSMContext):
-    await state.update_data(size=float(msg.text))
-    await state.set_state(AddTrade.notes)
-    await msg.answer("📝 Заметки (или '-' если нет):")
+@dp.message(AddTrade.exit_)
+async def exit_price(msg: Message, state: FSMContext):
+    try:
+        exit_price = round(float(msg.text.replace(",", ".")), 2)
+    except:
+        await msg.answer("Введите число, например: 1.5")
+        return
 
-
+    await state.update_data(exit_price=exit_price)
+    await state.set_state(AddTrade.size)
+    await msg.answer("📦 Размер позиции:")
+    
+    
 @dp.message(AddTrade.notes)
 async def notes(msg: Message, state: FSMContext):
     data = await state.get_data()
