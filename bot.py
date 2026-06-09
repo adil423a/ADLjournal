@@ -109,8 +109,8 @@ async def start(msg: Message, state: FSMContext):
         "/history — история\n"
         "/stats — статистика\n"
         "/delete — удалить сделку\n"
-        "/calendar — совет"
-        "/trade — совет"
+        "/calendar — календарь\n"
+        "/trade — сделка\n"
         "/tip — совет"
     )
 
