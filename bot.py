@@ -2,6 +2,7 @@ import os
 import asyncio
 import asyncpg
 import random
+import calendar
 
 from aiogram import Bot, Dispatcher
 from aiogram.types import Message
@@ -9,6 +10,8 @@ from aiogram.filters import CommandStart, Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
+from collections import defaultdict
+from datetime import datetime
 
 
 TOKEN = os.environ["BOT_TOKEN"]
@@ -257,6 +260,82 @@ async def trade_view(msg: Message):
     )
 
     await msg.answer(text)
+# ───────────────── Calendar ─────────────────
+
+
+@dp.message(Command("calendar"))
+async def calendar_view(msg: Message):
+    conn = await get_db()
+    rows = await conn.fetch(
+        "SELECT pnl, created_at FROM trades WHERE user_id=$1",
+        msg.from_user.id
+    )
+    await conn.close()
+
+    if not rows:
+        await msg.answer("Нет сделок")
+        return
+
+    daily = defaultdict(float)
+
+    for r in rows:
+        day = r["created_at"].date()
+        daily[day] += float(r["pnl"])
+
+    now = datetime.now()
+    year, month = now.year, now.month
+
+    month_name = calendar.month_name[month]
+
+    # ───── ANALYTICS ─────
+    pnls = list(daily.values())
+
+    total_pnl = sum(pnls)
+    wins = len([p for p in pnls if p > 0])
+    losses = len([p for p in pnls if p < 0])
+    winrate = (wins / len(pnls) * 100) if pnls else 0
+
+    best_day = max(pnls) if pnls else 0
+    worst_day = min(pnls) if pnls else 0
+
+    text = f"📅 PnL календарь — {month_name} {year}\n\n"
+
+    # ───── CALENDAR GRID ─────
+    cal = calendar.monthcalendar(year, month)
+
+    for week in cal:
+        line = ""
+
+        for day in week:
+            if day == 0:
+                line += "    "
+                continue
+
+            date = datetime(year, month, day).date()
+            pnl = daily.get(date, 0)
+
+            if pnl > 0:
+                icon = "🟩"
+            elif pnl < 0:
+                icon = "🟥"
+            else:
+                icon = "⬜️"
+
+            line += f"{day:02d}{icon} "
+
+        text += line + "\n"
+
+    # ───── STATS ─────
+    text += "\n📊 Итоги месяца\n\n"
+    text += f"💰 PnL: {fmt(total_pnl)}\n"
+    text += f"📈 Winrate: {winrate:.1f}%\n"
+    text += f"📦 Дней с трейдингом: {len(pnls)}\n\n"
+    text += f"🏆 Лучший день: {fmt(best_day)}\n"
+    text += f"💀 Худший день: {fmt(worst_day)}"
+
+    await msg.answer(text)
+    
+    
 # ───────────────── STATS ─────────────────
 @dp.message(Command("stats"))
 async def stats(msg: Message):
