@@ -1,6 +1,7 @@
 import os
 import asyncio
 import asyncpg
+import random
 
 from aiogram import Bot, Dispatcher
 from aiogram.types import Message
@@ -9,6 +10,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
 
+
 TOKEN = os.environ["BOT_TOKEN"]
 DATABASE_URL = os.environ.get("DATABASE_URL", "").replace("postgres://", "postgresql://")
 
@@ -16,7 +18,20 @@ bot = Bot(token=TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
 
 
-# ── STATES ─────────────────────────────────────────────
+# ───────────────── MOTIVATION ─────────────────
+MOTIVATION_MESSAGES = [
+    "📊 Дисциплина делает деньги, не эмоции.",
+    "🧠 Сначала система — потом прибыль.",
+    "📉 Убытки — часть игры. Важно управление риском.",
+    "🚀 Главное не заработать быстро, а остаться в игре.",
+    "💡 Профессионалы думают в вероятностях, не в эмоциях.",
+    "📍 Одна хорошая сделка лучше десяти случайных.",
+    "⏱ Рынок вознаграждает терпение, не спешку.",
+    "💰 Защищай капитал — это твой главный актив.",
+]
+
+
+# ───────────────── STATES ─────────────────
 class AddTrade(StatesGroup):
     symbol = State()
     direction = State()
@@ -26,7 +41,11 @@ class AddTrade(StatesGroup):
     notes = State()
 
 
-# ── DB ────────────────────────────────────────────────
+class DeleteTrade(StatesGroup):
+    choose = State()
+
+
+# ───────────────── DB ─────────────────
 async def get_db():
     return await asyncpg.connect(
         DATABASE_URL,
@@ -53,7 +72,7 @@ async def init_db():
     await conn.close()
 
 
-# ── HELPERS ───────────────────────────────────────────
+# ───────────────── HELPERS ─────────────────
 def calc_pnl(direction, entry, exit_price, size):
     raw = (exit_price - entry) * size
     return -raw if direction.lower() == "short" else raw
@@ -67,21 +86,31 @@ def pnl_emoji(v):
     return "🟢" if v >= 0 else "🔴"
 
 
-# ── START ─────────────────────────────────────────────
+def mot():
+    return random.choice(MOTIVATION_MESSAGES)
+
+
+# ───────────────── START ─────────────────
 @dp.message(CommandStart())
 async def start(msg: Message, state: FSMContext):
     await state.clear()
+
+    name = msg.from_user.first_name or "трейдер"
+
     await msg.answer(
-        "👋 Привет!\n\n"
-        "Команды:\n"
+        f"👋 Привет, {name}!\n\n"
+        "📊 Trading Journal готов к работе.\n\n"
+        f"💡 {mot()}\n\n"
+        "📌 Команды:\n"
         "/new — новая сделка\n"
+        "/history — история\n"
         "/stats — статистика\n"
-        "/history — последние сделки\n"
-        "/delete <id> — удалить сделку"
+        "/delete — удалить сделку\n"
+        "/tip — совет"
     )
 
 
-# ── NEW TRADE FLOW ────────────────────────────────────
+# ───────────────── ADD TRADE ─────────────────
 @dp.message(Command("new"))
 async def new_trade(msg: Message, state: FSMContext):
     await state.set_state(AddTrade.symbol)
@@ -127,7 +156,7 @@ async def size(msg: Message, state: FSMContext):
 async def notes(msg: Message, state: FSMContext):
     data = await state.get_data()
 
-    notes = msg.text if msg.text != "-" else ""
+    notes = "" if msg.text == "-" else msg.text
     pnl = calc_pnl(data["direction"], data["entry"], data["exit_price"], data["size"])
 
     conn = await get_db()
@@ -150,12 +179,34 @@ async def notes(msg: Message, state: FSMContext):
     await state.clear()
 
     await msg.answer(
-        f"✅ Сохранено\n\n"
-        f"{data['symbol']} {pnl_emoji(pnl)} {fmt(pnl)}"
+        f"💰 Сделка сохранена!\n\n"
+        f"{data['symbol']} {pnl_emoji(pnl)} {fmt(pnl)}\n\n"
+        f"💡 {mot()}"
     )
 
 
-# ── STATS ─────────────────────────────────────────────
+# ───────────────── HISTORY ─────────────────
+@dp.message(Command("history"))
+async def history(msg: Message):
+    conn = await get_db()
+    rows = await conn.fetch(
+        "SELECT id, symbol, pnl FROM trades WHERE user_id=$1 ORDER BY created_at DESC LIMIT 10",
+        msg.from_user.id
+    )
+    await conn.close()
+
+    if not rows:
+        await msg.answer("История пуста")
+        return
+
+    text = "📋 Последние сделки:\n\n"
+    for r in rows:
+        text += f"ID: {r['id']} | {r['symbol']} {pnl_emoji(float(r['pnl']))} {fmt(float(r['pnl']))}\n"
+
+    await msg.answer(text)
+
+
+# ───────────────── STATS ─────────────────
 @dp.message(Command("stats"))
 async def stats(msg: Message):
     conn = await get_db()
@@ -168,48 +219,54 @@ async def stats(msg: Message):
 
     pnls = [float(r["pnl"]) for r in rows]
     total = sum(pnls)
-
     winrate = len([p for p in pnls if p > 0]) / len(pnls) * 100
 
     await msg.answer(
         f"📊 Статистика\n\n"
         f"PnL: {fmt(total)}\n"
         f"Winrate: {winrate:.1f}%\n"
-        f"Trades: {len(pnls)}"
+        f"Trades: {len(pnls)}\n\n"
+        f"💡 {mot()}"
     )
 
 
-# ── HISTORY ───────────────────────────────────────────
-@dp.message(Command("history"))
-async def history(msg: Message):
+# ───────────────── DELETE FLOW ─────────────────
+@dp.message(Command("delete"))
+async def delete_start(msg: Message, state: FSMContext):
     conn = await get_db()
     rows = await conn.fetch(
-        "SELECT symbol, direction, pnl FROM trades WHERE user_id=$1 ORDER BY created_at DESC LIMIT 10",
+        "SELECT id, symbol, pnl FROM trades WHERE user_id=$1 ORDER BY created_at DESC LIMIT 10",
         msg.from_user.id
     )
     await conn.close()
 
     if not rows:
-        await msg.answer("История пуста")
+        await msg.answer("Сделок нет")
         return
 
-    text = "📋 Последние сделки:\n\n"
-    for r in rows:
-        text += f"{r['symbol']} {pnl_emoji(r['pnl'])} {fmt(float(r['pnl']))}\n"
+    await state.update_data(rows=rows)
+    await state.set_state(DeleteTrade.choose)
+
+    text = "🗑 Введи номер сделки:\n\n"
+    for i, r in enumerate(rows, 1):
+        text += f"{i}. {r['symbol']} {fmt(float(r['pnl']))}\n"
 
     await msg.answer(text)
 
 
-# ── DELETE ────────────────────────────────────────────
-@dp.message(Command("delete"))
-async def delete(msg: Message):
-    parts = msg.text.split()
+@dp.message(DeleteTrade.choose)
+async def delete_choose(msg: Message, state: FSMContext):
+    data = await state.get_data()
+    rows = data["rows"]
 
-    if len(parts) < 2:
-        await msg.answer("Используй: /delete ID")
+    try:
+        index = int(msg.text)
+        assert 1 <= index <= len(rows)
+    except:
+        await msg.answer("Введи корректный номер")
         return
 
-    trade_id = int(parts[1])
+    trade_id = rows[index - 1]["id"]
 
     conn = await get_db()
     await conn.execute(
@@ -219,10 +276,18 @@ async def delete(msg: Message):
     )
     await conn.close()
 
+    await state.clear()
+
     await msg.answer("🗑 Удалено")
 
 
-# ── MAIN ──────────────────────────────────────────────
+# ───────────────── TIP ─────────────────
+@dp.message(Command("tip"))
+async def tip(msg: Message):
+    await msg.answer(f"💡 {mot()}")
+
+
+# ───────────────── MAIN ─────────────────
 async def main():
     await init_db()
     await dp.start_polling(bot)
