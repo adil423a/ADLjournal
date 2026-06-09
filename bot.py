@@ -72,6 +72,13 @@ async def init_db():
             created_at TIMESTAMP DEFAULT NOW()
         )
     """)
+    await conn.execute("""
+CREATE TABLE IF NOT EXISTS user_settings (
+    user_id BIGINT PRIMARY KEY,
+    start_balance NUMERIC DEFAULT 0
+)
+""")
+    
     await conn.close()
 
 
@@ -113,6 +120,8 @@ async def start(msg: Message, state: FSMContext):
         "/delete — удалить сделку\n"
         "/calendar — календарь\n"
         "/trade — сделка\n"
+        "/setdeposit — установить депозит\n"
+        "/balance — текущий баланс\n"
         "/tip — совет"
     )
 
@@ -432,11 +441,93 @@ async def delete_choose(msg: Message, state: FSMContext):
 
     await msg.answer("🗑 Удалено")
 
+# ── DEPOSIT SYSTEM ────────────────────────────────────────────────────────────
+
+async def get_deposit(user_id):
+    conn = await get_db()
+
+    row = await conn.fetchrow(
+        "SELECT start_balance FROM user_settings WHERE user_id=$1",
+        user_id
+    )
+
+    await conn.close()
+
+    if row:
+        return float(row["start_balance"])
+
+    return 0
+
+
+@dp.message(Command("setdeposit"))
+async def set_deposit(msg: Message):
+    parts = msg.text.split()
+
+    if len(parts) != 2:
+        await msg.answer(
+            "Использование:\n"
+            "/setdeposit 1000"
+        )
+        return
+
+    try:
+        deposit = round(float(parts[1].replace(",", ".")), 2)
+    except:
+        await msg.answer("❌ Введите корректное число")
+        return
+
+    conn = await get_db()
+
+    await conn.execute("""
+        INSERT INTO user_settings(user_id, start_balance)
+        VALUES($1, $2)
+        ON CONFLICT(user_id)
+        DO UPDATE SET start_balance = EXCLUDED.start_balance
+    """, msg.from_user.id, deposit)
+
+    await conn.close()
+
+    await msg.answer(
+        f"💰 Начальный депозит установлен:\n"
+        f"{deposit:.2f}$"
+    )
+
+
+@dp.message(Command("balance"))
+async def balance(msg: Message):
+    user_id = msg.from_user.id
+
+    start_balance = await get_deposit(user_id)
+
+    conn = await get_db()
+
+    row = await conn.fetchrow(
+        "SELECT COALESCE(SUM(pnl),0) AS total FROM trades WHERE user_id=$1",
+        user_id
+    )
+
+    await conn.close()
+
+    total_pnl = float(row["total"])
+
+    current_balance = start_balance + total_pnl
+
+    profit_percent = (
+        (total_pnl / start_balance) * 100
+        if start_balance > 0 else 0
+    )
+
+    await msg.answer(
+        f"💵 Депозит: {start_balance:.2f}$\n"
+        f"📈 Прибыль: {total_pnl:+.2f}$\n"
+        f"🏦 Баланс: {current_balance:.2f}$\n"
+        f"📊 Доходность: {profit_percent:.2f}%"
+    )
 
 # ───────────────── TIP ─────────────────
 @dp.message(Command("tip"))
 async def tip(msg: Message):
-    await msg.answer(f"💡 {mot()}")
+    await msg.answer(f" {mot()}")
 
 
 # ───────────────── MAIN ─────────────────
