@@ -207,13 +207,18 @@ async def history(msg: Message):
 # ───────────────── trade ─────────────────
 @dp.message(Command("trade"))
 async def trade_view(msg: Message):
-    parts = msg.text.split()
+    try:
+        parts = msg.text.split()
 
-    if len(parts) < 2:
-        await msg.answer("Используй: /trade ID")
+        if len(parts) < 2:
+            await msg.answer("Используй: /trade ID")
+            return
+
+        trade_id = int(parts[1])
+
+    except ValueError:
+        await msg.answer("❌ ID должен быть числом\nПример: /trade 12")
         return
-
-    trade_id = int(parts[1])
 
     conn = await get_db()
     row = await conn.fetchrow(
@@ -239,9 +244,6 @@ async def trade_view(msg: Message):
     )
 
     await msg.answer(text)
-
-
-
 # ───────────────── STATS ─────────────────
 @dp.message(Command("stats"))
 async def stats(msg: Message):
