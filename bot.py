@@ -153,7 +153,7 @@ async def direction(msg: Message, state: FSMContext):
     await state.set_state(AddTrade.entry)
 
     icon = "▲ LONG" if text == "long" else "▼ SHORT"
-    await msg.answer(f"📍 Направление: {icon}\n\n🔵 Entry price:")
+    await msg.answer(f"📍 Направление: {icon}\n\n🔵 Цена входа:")
 
 
 @dp.message(AddTrade.entry)
@@ -168,6 +168,12 @@ async def exit_price(msg: Message, state: FSMContext):
     await state.update_data(exit_price=float(msg.text))
     await state.set_state(AddTrade.size)
     await msg.answer("📦 Размер позиции:")
+
+@dp.message(AddTrade.size)
+async def size(msg: Message, state: FSMContext):
+    await state.update_data(size=float(msg.text))
+    await state.set_state(AddTrade.notes)
+    await msg.answer("📝 Заметки (или '-' если нет):")
     
 @dp.message(AddTrade.notes)
 async def notes(msg: Message, state: FSMContext):
