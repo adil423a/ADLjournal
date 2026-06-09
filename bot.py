@@ -126,9 +126,17 @@ async def symbol(msg: Message, state: FSMContext):
 
 @dp.message(AddTrade.direction)
 async def direction(msg: Message, state: FSMContext):
-    await state.update_data(direction=msg.text.lower())
+    text = msg.text.lower().strip()
+
+    if text not in ["long", "short"]:
+        await msg.answer("❌ Введи только: long или short")
+        return
+
+    await state.update_data(direction=text)
     await state.set_state(AddTrade.entry)
-    await msg.answer("🔵 Цена входа:")
+
+    icon = "▲ LONG" if text == "long" else "▼ SHORT"
+    await msg.answer(f"📍 Направление: {icon}\n\n🔵 Цена входа:")
 
 
 @dp.message(AddTrade.entry)
