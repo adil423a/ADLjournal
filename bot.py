@@ -92,8 +92,8 @@ def pnl_emoji(v):
 def mot():
     return random.choice(MOTIVATION_MESSAGES)
 
-def clean_float(value: str) -> float:
-    return round(float(value.replace(",", ".")), 2)
+def fmt_num(v, digits=2):
+    return f"{float(v):.{digits}f}"
 
 # ───────────────── START ─────────────────
 @dp.message(CommandStart())
@@ -271,15 +271,15 @@ async def trade_view(msg: Message):
         return
 
     text = (
-        f"📊 Сделка #{row['id']}\n\n"
-        f"📌 Символ: {row['symbol']}\n"
-        f"📍 Направление: {row['direction']}\n"
-        f"🔵 Вход: {row['entry']}\n"
-        f"🔵 Выход: {row['exit_price']}\n"
-        f"📦 Размер: {row['size']}\n"
-        f"💰 PnL: {fmt(float(row['pnl']))}\n\n"
-        f"📝 Заметки:\n{row['notes'] or '—'}"
-    )
+    f"📊 Сделка #{row['id']}\n\n"
+    f"📌 Символ: {row['symbol']}\n"
+    f"📍 Направление: {row['direction']}\n"
+    f"🔵 Вход: {fmt_num(row['entry'])}\n"
+    f"🔵 Выход: {fmt_num(row['exit_price'])}\n"
+    f"📦 Размер: {fmt_num(row['size'])}\n"
+    f"💰 PnL: {fmt(float(row['pnl']))}\n\n"
+    f"📝 Заметки:\n{row['notes'] or '—'}"
+)
 
     await msg.answer(text)
 # ───────────────── Calendar ─────────────────
