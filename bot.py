@@ -11,7 +11,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
 from collections import defaultdict
-from datetime import datetime
+from datetime import datetime, timedelta
 
 
 TOKEN = os.environ["BOT_TOKEN"]
