@@ -204,6 +204,42 @@ async def history(msg: Message):
         text += f"ID: {r['id']} | {r['symbol']} {pnl_emoji(float(r['pnl']))} {fmt(float(r['pnl']))}\n"
 
     await msg.answer(text)
+# ───────────────── trade ─────────────────
+@dp.message(Command("trade"))
+async def trade_view(msg: Message):
+    parts = msg.text.split()
+
+    if len(parts) < 2:
+        await msg.answer("Используй: /trade ID")
+        return
+
+    trade_id = int(parts[1])
+
+    conn = await get_db()
+    row = await conn.fetchrow(
+        "SELECT * FROM trades WHERE id=$1 AND user_id=$2",
+        trade_id,
+        msg.from_user.id
+    )
+    await conn.close()
+
+    if not row:
+        await msg.answer("Сделка не найдена")
+        return
+
+    text = (
+        f"📊 Сделка #{row['id']}\n\n"
+        f"📌 Символ: {row['symbol']}\n"
+        f"📍 Направление: {row['direction']}\n"
+        f"🔵 Вход: {row['entry']}\n"
+        f"🔵 Выход: {row['exit_price']}\n"
+        f"📦 Размер: {row['size']}\n"
+        f"💰 PnL: {fmt(float(row['pnl']))}\n\n"
+        f"📝 Заметки:\n{row['notes'] or '—'}"
+    )
+
+    await msg.answer(text)
+
 
 
 # ───────────────── STATS ─────────────────
