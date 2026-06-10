@@ -23,7 +23,7 @@ dp = Dispatcher(storage=MemoryStorage())
 pool: asyncpg.Pool = None
 
 
-# ───────────────── MOTIVATION ─────────────────
+# ───────────────── MOTIVATIONN ─────────────────
 MOTIVATION_MESSAGES = [
     "📊 Дисциплина делает деньги, не эмоции.",
     "🧠 Сначала система — потом прибыль.",
