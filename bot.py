@@ -16,6 +16,8 @@ from datetime import datetime
 
 TOKEN = os.environ["BOT_TOKEN"]
 DATABASE_URL = os.environ.get("DATABASE_URL", "").replace("postgres://", "postgresql://")
+# FIX 4: SSL через отдельную переменную окружения, не по строке
+DB_SSL = os.environ.get("DB_SSL", "false").lower() == "true"
 
 bot = Bot(token=TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
@@ -23,7 +25,7 @@ dp = Dispatcher(storage=MemoryStorage())
 pool: asyncpg.Pool = None
 
 
-# ───────────────── MOTIVATIONN ─────────────────
+# ───────────────── MOTIVATION ─────────────────
 MOTIVATION_MESSAGES = [
     "📊 Дисциплина делает деньги, не эмоции.",
     "🧠 Сначала система — потом прибыль.",
@@ -98,7 +100,6 @@ def mot():
 
 
 def parse_float(text: str):
-    """Парсит число из строки. Возвращает float или None."""
     try:
         return float(text.replace(",", "."))
     except ValueError:
@@ -258,15 +259,17 @@ async def trade_view(msg: Message):
         await msg.answer("Используй: /trade ID")
         return
 
-    trade_id = parse_float(parts[1])
-    if trade_id is None or not float(parts[1]).is_integer():
+    # FIX 2: чистый int() в try/except вместо двойного parse_float + is_integer
+    try:
+        trade_id = int(parts[1])
+    except ValueError:
         await msg.answer("❌ ID должен быть числом\nПример: /trade 12")
         return
 
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
             "SELECT * FROM trades WHERE id=$1 AND user_id=$2",
-            int(trade_id),
+            trade_id,
             msg.from_user.id
         )
 
@@ -301,21 +304,23 @@ async def calendar_view(msg: Message):
         await msg.answer("Нет сделок")
         return
 
+    # FIX 1: winrate по сделкам, а не по дням
     daily = defaultdict(float)
+    all_pnls = []
     for r in rows:
         day = r["created_at"].date()
         daily[day] += float(r["pnl"])
+        all_pnls.append(float(r["pnl"]))
 
     now = datetime.now()
     year, month = now.year, now.month
     month_name = calendar.month_name[month]
 
-    pnls = list(daily.values())
-    total_pnl = sum(pnls)
-    wins = len([p for p in pnls if p > 0])
-    winrate = (wins / len(pnls) * 100) if pnls else 0
-    best_day = max(pnls) if pnls else 0
-    worst_day = min(pnls) if pnls else 0
+    total_pnl = sum(all_pnls)
+    wins = len([p for p in all_pnls if p > 0])
+    winrate = (wins / len(all_pnls) * 100) if all_pnls else 0
+    best_day = max(daily.values()) if daily else 0
+    worst_day = min(daily.values()) if daily else 0
 
     text = f"📅 PnL календарь — {month_name} {year}\n\n"
 
@@ -339,8 +344,8 @@ async def calendar_view(msg: Message):
 
     text += "\n📊 Итоги месяца\n\n"
     text += f"💰 PnL: {fmt(total_pnl)}\n"
-    text += f"📈 Winrate: {winrate:.1f}%\n"
-    text += f"📦 Дней с трейдингом: {len(pnls)}\n\n"
+    text += f"📈 Winrate: {winrate:.1f}% (по сделкам)\n"
+    text += f"📦 Всего сделок: {len(all_pnls)}\n\n"
     text += f"🏆 Лучший день: {fmt(best_day)}\n"
     text += f"💀 Худший день: {fmt(worst_day)}"
 
@@ -386,7 +391,6 @@ async def delete_start(msg: Message, state: FSMContext):
         await msg.answer("Сделок нет")
         return
 
-    # Сохраняем сериализуемый список
     rows_data = [{"id": r["id"], "symbol": r["symbol"], "pnl": float(r["pnl"])} for r in rows]
     await state.update_data(rows=rows_data)
     await state.set_state(DeleteTrade.choose)
@@ -394,6 +398,8 @@ async def delete_start(msg: Message, state: FSMContext):
     text = "🗑 Введи номер сделки:\n\n"
     for i, r in enumerate(rows_data, 1):
         text += f"{i}. {r['symbol']} {fmt(r['pnl'])}\n"
+    # FIX 3: явно указываем допустимый диапазон
+    text += f"\nВведи число от 1 до {len(rows_data)}:"
 
     await msg.answer(text)
 
@@ -405,9 +411,10 @@ async def delete_choose(msg: Message, state: FSMContext):
 
     try:
         index = int(msg.text)
-        assert 1 <= index <= len(rows)
-    except Exception:
-        await msg.answer("Введи корректный номер")
+        if not (1 <= index <= len(rows)):
+            raise ValueError
+    except ValueError:
+        await msg.answer(f"❌ Введи число от 1 до {len(rows)}")
         return
 
     trade_id = rows[index - 1]["id"]
@@ -485,17 +492,17 @@ async def balance(msg: Message):
 
     balance_before_today = start_balance + (all_pnl - today_pnl)
     balance_before_month = start_balance + (all_pnl - month_pnl)
-    
+
     def pct(pnl, base):
         return (pnl / base) * 100 if base > 0 else 0
-    
+
     text = (
-    f"💰 Balance Dashboard\n\n"
-    f"📅 Сегодня: {today_pnl:+.2f}$ ({pct(today_pnl, balance_before_today):+.2f}%)\n"
-    f"📆 Месяц: {month_pnl:+.2f}$ ({pct(month_pnl, balance_before_month):+.2f}%)\n"
-    f"♾ Всё время: {all_pnl:+.2f}$ ({pct(all_pnl, start_balance):+.2f}%)\n\n"
-    f"💵 Депозит: {start_balance:.2f}$\n"
-    f"🏦 Баланс: {current_balance:.2f}$"
+        f"💰 Balance Dashboard\n\n"
+        f"📅 Сегодня: {today_pnl:+.2f}$ ({pct(today_pnl, balance_before_today):+.2f}%)\n"
+        f"📆 Месяц: {month_pnl:+.2f}$ ({pct(month_pnl, balance_before_month):+.2f}%)\n"
+        f"♾ Всё время: {all_pnl:+.2f}$ ({pct(all_pnl, start_balance):+.2f}%)\n\n"
+        f"💵 Депозит: {start_balance:.2f}$\n"
+        f"🏦 Баланс: {current_balance:.2f}$"
     )
     await msg.answer(text)
 
@@ -542,18 +549,44 @@ async def tip(msg: Message):
     await msg.answer(f"💡 {mot()}")
 
 
+# FIX 6: fallback для неизвестных сообщений вне FSM
+@dp.message()
+async def fallback(msg: Message, state: FSMContext):
+    current_state = await state.get_state()
+    # Если пользователь в FSM — не мешаем, хэндлеры сами разберутся
+    if current_state is not None:
+        return
+    await msg.answer(
+        "❓ Не понимаю команду.\n\n"
+        "Используй /start чтобы увидеть список команд."
+    )
+
+
 # ───────────────── MAIN ─────────────────
 async def main():
     global pool
+    # FIX 4: SSL через переменную окружения DB_SSL=true
     pool = await asyncpg.create_pool(
         DATABASE_URL,
-        ssl="require" if "railway" in DATABASE_URL else False,
+        ssl="require" if DB_SSL else False,
         min_size=1,
         max_size=5
     )
     await init_db()
-    await dp.start_polling(bot)
 
+    # FIX 7: передаём pool через workflow_data
+    dp["pool"] = pool
+
+    # FIX 8: закрываем пул при остановке
+    try:
+        await dp.start_polling(bot)
+    finally:
+        await pool.close()
+        await bot.session.close()
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
 
 if __name__ == "__main__":
     asyncio.run(main())
