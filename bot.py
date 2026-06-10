@@ -574,28 +574,28 @@ async def reset_account(msg: Message, state: FSMContext):
 @dp.message(ResetAccount.confirm)
 async def confirm_reset(msg: Message, state: FSMContext):
     answer = msg.text.strip().upper()
-
+ 
     if answer == "ДА":
-    async with pool.acquire() as conn:
-        await conn.execute(
-            "DELETE FROM trades WHERE user_id=$1", msg.from_user.id
-        )
-        await conn.execute(
-            "DELETE FROM user_settings WHERE user_id=$1", msg.from_user.id
-        )
-        # Сбрасываем счётчик ID если в таблице больше нет сделок
-        remaining = await conn.fetchval("SELECT COUNT(*) FROM trades")
-        if remaining == 0:
-            await conn.execute("ALTER SEQUENCE trades_id_seq RESTART WITH 1")
+        async with pool.acquire() as conn:
+            await conn.execute(
+                "DELETE FROM trades WHERE user_id=$1", msg.from_user.id
+            )
+            await conn.execute(
+                "DELETE FROM user_settings WHERE user_id=$1", msg.from_user.id
+            )
+            # Сбрасываем счётчик ID если в таблице больше нет сделок
+            remaining = await conn.fetchval("SELECT COUNT(*) FROM trades")
+            if remaining == 0:
+                await conn.execute("ALTER SEQUENCE trades_id_seq RESTART WITH 1")
         await msg.answer(
             "🗑 Аккаунт полностью сброшен.\n\n"
             "Начни заново:\n/setdeposit 1000"
         )
     else:
         await msg.answer("✅ Отменено")
-
+ 
     await state.clear()
-
+ 
 
 # ───────────────── SCREENSHOT ─────────────────
 @dp.message(Command("screenshot"))
