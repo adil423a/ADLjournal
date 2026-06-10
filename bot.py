@@ -487,7 +487,7 @@ async def balance(msg: Message):
     balance_before_month = start_balance + (all_pnl - month_pnl)
     
     def pct(pnl, base):
-    return (pnl / base) * 100 if base > 0 else 0
+        return (pnl / base) * 100 if base > 0 else 0
     
     text = (
     f"💰 Balance Dashboard\n\n"
