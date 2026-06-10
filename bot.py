@@ -46,6 +46,12 @@ class AddTrade(StatesGroup):
     exit_ = State()
     size = State()
     notes = State()
+    screenshot = State()
+
+
+class AddScreenshot(StatesGroup):
+    trade_id = State()
+    photo = State()
 
 
 class DeleteTrade(StatesGroup):
@@ -77,6 +83,13 @@ async def init_db():
             CREATE TABLE IF NOT EXISTS user_settings (
                 user_id BIGINT PRIMARY KEY,
                 start_balance NUMERIC DEFAULT 0
+            )
+        """)
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS trade_screenshots (
+                trade_id BIGINT PRIMARY KEY REFERENCES trades(id) ON DELETE CASCADE,
+                file_id TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT NOW()
             )
         """)
 
@@ -127,7 +140,8 @@ async def start(msg: Message, state: FSMContext):
         "/setdeposit — установить депозит\n"
         "/balance — текущий баланс\n"
         "/resetaccount — полный сброс аккаунта\n"
-        "/tip — совет"
+        "/tip — совет\n"
+        "/screenshot — добавить скриншот к сделке"
     )
 
 
@@ -201,10 +215,11 @@ async def notes(msg: Message, state: FSMContext):
     pnl = calc_pnl(data["direction"], data["entry"], data["exit_price"], data["size"])
 
     async with pool.acquire() as conn:
-        await conn.execute(
+        trade_id = await conn.fetchval(
             """
             INSERT INTO trades(user_id, symbol, direction, entry, exit_price, size, pnl, notes)
             VALUES($1,$2,$3,$4,$5,$6,$7,$8)
+            RETURNING id
             """,
             msg.from_user.id,
             data["symbol"],
@@ -216,11 +231,38 @@ async def notes(msg: Message, state: FSMContext):
             notes_text
         )
 
-    await state.clear()
-
+    await state.update_data(trade_id=trade_id, pnl=pnl)
+    await state.set_state(AddTrade.screenshot)
     await msg.answer(
-        f"💰 Сделка сохранена!\n\n"
-        f"{data['symbol']} {pnl_emoji(pnl)} {fmt(pnl)}\n\n"
+        f"💰 Сделка сохранена! {data['symbol']} {pnl_emoji(pnl)} {fmt(pnl)}\n\n"
+        "📸 Прикрепи скриншот графика или '-' чтобы пропустить:"
+    )
+
+
+@dp.message(AddTrade.screenshot)
+async def trade_screenshot(msg: Message, state: FSMContext):
+    data = await state.get_data()
+    trade_id = data["trade_id"]
+    pnl = data["pnl"]
+
+    if msg.photo:
+        file_id = msg.photo[-1].file_id  # берём наибольшее разрешение
+        async with pool.acquire() as conn:
+            await conn.execute(
+                """
+                INSERT INTO trade_screenshots(trade_id, file_id)
+                VALUES($1, $2)
+                ON CONFLICT(trade_id) DO UPDATE SET file_id = EXCLUDED.file_id
+                """,
+                trade_id, file_id
+            )
+        screenshot_note = "📸 Скриншот сохранён."
+    else:
+        screenshot_note = "📷 Скриншот пропущен."
+
+    await state.clear()
+    await msg.answer(
+        f"{screenshot_note}\n\n"
         f"💡 {mot()}\n\n"
         "📌 Что дальше?\n"
         "• /history — посмотреть сделки\n"
@@ -288,7 +330,15 @@ async def trade_view(msg: Message):
         f"📝 Заметки:\n{row['notes'] or '—'}"
     )
 
-    await msg.answer(text)
+    async with pool.acquire() as conn:
+        screenshot = await conn.fetchrow(
+            "SELECT file_id FROM trade_screenshots WHERE trade_id=$1", trade_id
+        )
+
+    if screenshot:
+        await msg.answer_photo(screenshot["file_id"], caption=text)
+    else:
+        await msg.answer(text)
 
 
 # ───────────────── CALENDAR ─────────────────
@@ -543,6 +593,66 @@ async def confirm_reset(msg: Message, state: FSMContext):
     await state.clear()
 
 
+# ───────────────── SCREENSHOT ─────────────────
+@dp.message(Command("screenshot"))
+async def screenshot_start(msg: Message, state: FSMContext):
+    parts = msg.text.split()
+
+    if len(parts) < 2:
+        await msg.answer("Используй: /screenshot ID\nНапример: /screenshot 12")
+        return
+
+    try:
+        trade_id = int(parts[1])
+    except ValueError:
+        await msg.answer("❌ ID должен быть числом\nПример: /screenshot 12")
+        return
+
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT id, symbol, pnl FROM trades WHERE id=$1 AND user_id=$2",
+            trade_id, msg.from_user.id
+        )
+
+    if not row:
+        await msg.answer("Сделка не найдена")
+        return
+
+    await state.set_state(AddScreenshot.photo)
+    await state.update_data(trade_id=trade_id)
+    await msg.answer(
+        f"📸 Сделка #{trade_id} — {row['symbol']} {fmt(float(row['pnl']))}\n\n"
+        "Отправь скриншот графика:"
+    )
+
+
+@dp.message(AddScreenshot.photo)
+async def screenshot_save(msg: Message, state: FSMContext):
+    if not msg.photo:
+        await msg.answer("❌ Нужно отправить фото. Попробуй ещё раз:")
+        return
+
+    data = await state.get_data()
+    trade_id = data["trade_id"]
+    file_id = msg.photo[-1].file_id
+
+    async with pool.acquire() as conn:
+        await conn.execute(
+            """
+            INSERT INTO trade_screenshots(trade_id, file_id)
+            VALUES($1, $2)
+            ON CONFLICT(trade_id) DO UPDATE SET file_id = EXCLUDED.file_id
+            """,
+            trade_id, file_id
+        )
+
+    await state.clear()
+    await msg.answer(
+        f"📸 Скриншот сохранён для сделки #{trade_id}\n\n"
+        f"Посмотреть: /trade {trade_id}"
+    )
+
+
 # ───────────────── TIP ─────────────────
 @dp.message(Command("tip"))
 async def tip(msg: Message):
@@ -584,9 +694,6 @@ async def main():
         await pool.close()
         await bot.session.close()
 
-
-if __name__ == "__main__":
-    asyncio.run(main())
 
 if __name__ == "__main__":
     asyncio.run(main())
