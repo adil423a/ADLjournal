@@ -485,11 +485,11 @@ async def balance(msg: Message):
 
     balance_before_today = start_balance + (all_pnl - today_pnl)
     balance_before_month = start_balance + (all_pnl - month_pnl)
-
-def pct(pnl, base):
+    
+    def pct(pnl, base):
     return (pnl / base) * 100 if base > 0 else 0
-
-text = (
+    
+    text = (
     f"💰 Balance Dashboard\n\n"
     f"📅 Сегодня: {today_pnl:+.2f}$ ({pct(today_pnl, balance_before_today):+.2f}%)\n"
     f"📆 Месяц: {month_pnl:+.2f}$ ({pct(month_pnl, balance_before_month):+.2f}%)\n"
