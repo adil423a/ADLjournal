@@ -495,9 +495,7 @@ text = (
     f"📆 Месяц: {month_pnl:+.2f}$ ({pct(month_pnl, balance_before_month):+.2f}%)\n"
     f"♾ Всё время: {all_pnl:+.2f}$ ({pct(all_pnl, start_balance):+.2f}%)\n\n"
     f"💵 Депозит: {start_balance:.2f}$\n"
-    f"🏦 Баланс: {current_balance:.2f}$"
-)
-
+    f"🏦 Баланс: {current_balance:.2f}$")
     await msg.answer(text)
 
 
